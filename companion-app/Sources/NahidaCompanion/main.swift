@@ -5,10 +5,63 @@ import CoreGraphics
 private let cellWidth = 192
 private let cellHeight = 208
 
-private enum PetState {
-    case idle
-    case waving
-    case looking(Int)
+private struct SpriteStep {
+    let row: Int
+    let column: Int
+    let offsetX: CGFloat
+
+    init(_ row: Int, _ column: Int, _ offsetX: CGFloat = 0) {
+        self.row = row
+        self.column = column
+        self.offsetX = offsetX
+    }
+}
+
+private enum PetAction: String, CaseIterable {
+    case wave, hop, cuddle, curious, stroll, focus, celebrate, nap
+
+    var title: String {
+        switch self {
+        case .wave: "挥挥手"
+        case .hop: "轻轻跳"
+        case .cuddle: "撒个娇"
+        case .curious: "好奇歪头"
+        case .stroll: "散散步"
+        case .focus: "专心想想"
+        case .celebrate: "开心一下"
+        case .nap: "打个盹"
+        }
+    }
+
+    var steps: [SpriteStep] {
+        switch self {
+        case .wave:
+            [0, 1, 2, 3, 2, 1, 0].map { SpriteStep(3, $0) }
+        case .hop:
+            [0, 1, 2, 3, 4, 3, 2, 1, 0].map { SpriteStep(4, $0) }
+        case .cuddle:
+            [SpriteStep(6, 2), SpriteStep(6, 3), SpriteStep(6, 4),
+             SpriteStep(3, 1), SpriteStep(3, 2), SpriteStep(3, 3),
+             SpriteStep(3, 2), SpriteStep(6, 4), SpriteStep(6, 5)]
+        case .curious:
+            [SpriteStep(9, 0), SpriteStep(9, 2), SpriteStep(9, 4),
+             SpriteStep(9, 2), SpriteStep(9, 0), SpriteStep(10, 6),
+             SpriteStep(10, 4), SpriteStep(10, 6), SpriteStep(9, 0)]
+        case .stroll:
+            (0..<8).map { SpriteStep(1, $0, CGFloat($0) * 3) } +
+            (0..<8).map { SpriteStep(2, $0, CGFloat(7 - $0) * 3) }
+        case .focus:
+            [0, 1, 2, 3, 4, 5, 4, 3, 2, 1, 0].map { SpriteStep(7, $0) }
+        case .celebrate:
+            [0, 1, 2, 3, 4, 5, 4, 2, 0].map { SpriteStep(8, $0) }
+        case .nap:
+            [0, 1].map { SpriteStep(0, $0) } +
+            Array(repeating: SpriteStep(0, 2), count: 18) +
+            [3, 4, 5].map { SpriteStep(0, $0) }
+        }
+    }
+
+    var frameDuration: TimeInterval { self == .nap ? 0.25 : 0.17 }
 }
 
 private enum Reminder: String, CaseIterable {
@@ -72,9 +125,11 @@ private final class SpriteAtlas {
     private var reminderItem: NSMenuItem!
     private var atlas: SpriteAtlas!
     private let speaker = AVSpeechSynthesizer()
-    private var state: PetState = .idle
+    private var activeAction: PetAction?
+    private var actionIsAmbient = false
+    private var actionStartedAt = Date.distantPast
+    private var nextAmbientAt = Date().addingTimeInterval(60)
     private var frameIndex = 0
-    private var stateEndsAt = Date.distantPast
     private var bubbleEndsAt = Date.distantPast
     private var lastCursor = NSEvent.mouseLocation
     private var lastCursorMoveAt = Date.distantPast
@@ -167,6 +222,16 @@ private final class SpriteAtlas {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "和小纳西妲说话", action: #selector(sayHello), keyEquivalent: "h"))
         menu.addItem(NSMenuItem(title: "今日小建议", action: #selector(showTip), keyEquivalent: "t"))
+        let actionItem = NSMenuItem(title: "看看小动作", action: nil, keyEquivalent: "")
+        let actionMenu = NSMenu()
+        for action in PetAction.allCases {
+            let item = NSMenuItem(title: action.title, action: #selector(playMenuAction(_:)), keyEquivalent: "")
+            item.representedObject = action.rawValue
+            item.target = self
+            actionMenu.addItem(item)
+        }
+        actionItem.submenu = actionMenu
+        menu.addItem(actionItem)
         menu.addItem(NSMenuItem(title: "安静一小时", action: #selector(snooze), keyEquivalent: "s"))
         menu.addItem(.separator())
         speechItem = NSMenuItem(title: "语音", action: #selector(toggleSpeech), keyEquivalent: "")
@@ -186,6 +251,28 @@ private final class SpriteAtlas {
         if let frame = atlas.frame(row: row, column: column) { imageView.image = frame }
     }
 
+    private func startAction(_ action: PetAction, at now: Date = Date(), ambient: Bool = false) {
+        activeAction = action
+        actionIsAmbient = ambient
+        actionStartedAt = now
+        nextAmbientAt = now.addingTimeInterval(Double.random(in: 55...100))
+    }
+
+    private func showAction(_ action: PetAction, at now: Date) -> Bool {
+        let steps = action.steps
+        let index = Int(now.timeIntervalSince(actionStartedAt) / action.frameDuration)
+        guard index < steps.count else {
+            activeAction = nil
+            actionIsAmbient = false
+            imageView.frame.origin.x = 54
+            return false
+        }
+        let step = steps[index]
+        imageView.frame.origin.x = 54 + step.offsetX
+        showFrame(row: step.row, column: step.column)
+        return true
+    }
+
     @objc private func tick() {
         let now = Date()
         if !bubble.isHidden && now >= bubbleEndsAt { bubble.isHidden = true }
@@ -195,24 +282,40 @@ private final class SpriteAtlas {
             lastCursorMoveAt = now
         }
 
-        if case .waving = state, now < stateEndsAt {
-            showFrame(row: 3, column: min(frameIndex, 3))
-            frameIndex = (frameIndex + 1) % 4
-            return
+        let idle = idleSeconds()
+        if let action = activeAction {
+            if actionIsAmbient && idle < 2 {
+                activeAction = nil
+                actionIsAmbient = false
+                imageView.frame.origin.x = 54
+            } else if showAction(action, at: now) {
+                return
+            }
         }
 
+        if idle >= 30, now >= nextAmbientAt, now >= snoozeUntil, bubble.isHidden {
+            let hour = Calendar.current.component(.hour, from: now)
+            let choices: [PetAction] = (hour >= 23 || hour < 8)
+                ? [.nap, .curious]
+                : [.wave, .hop, .cuddle, .curious, .stroll, .focus, .celebrate, .nap]
+            if let action = choices.randomElement() {
+                startAction(action, at: now, ambient: true)
+                _ = showAction(action, at: now)
+                return
+            }
+        }
+
+        imageView.frame.origin.x = 54
         let head = NSPoint(x: panel.frame.minX + 150, y: panel.frame.minY + 154)
         if now.timeIntervalSince(lastCursorMoveAt) < 2.2 {
             let degrees = (atan2(cursor.x - head.x, cursor.y - head.y) * 180 / .pi + 360)
                 .truncatingRemainder(dividingBy: 360)
             let direction = Int((degrees / 22.5).rounded()) % 16
-            state = .looking(direction)
             if direction < 8 { showFrame(row: 9, column: direction) }
             else { showFrame(row: 10, column: direction - 8) }
         } else {
-            state = .idle
             let hour = Calendar.current.component(.hour, from: now)
-            if (hour >= 23 || hour < 8) && now.timeIntervalSince(lastCursorMoveAt) > 300 {
+            if (hour >= 23 || hour < 8) && idle > 300 {
                 showFrame(row: 0, column: 2)
             } else {
                 showFrame(row: 0, column: (frameIndex / 3) % 6)
@@ -221,13 +324,11 @@ private final class SpriteAtlas {
         }
     }
 
-    private func say(_ message: String, speak: Bool = true) {
+    private func say(_ message: String, speak: Bool = true, action: PetAction = .wave) {
         bubbleLabel.stringValue = message
         bubble.isHidden = false
         bubbleEndsAt = Date().addingTimeInterval(8)
-        state = .waving
-        stateEndsAt = Date().addingTimeInterval(0.8)
-        frameIndex = 0
+        startAction(action)
         panel.orderFrontRegardless()
         if speak && speechEnabled {
             speaker.stopSpeaking(at: .immediate)
@@ -272,7 +373,7 @@ private final class SpriteAtlas {
         pending.removeAll()
         lastDeliveredAt = now
         let quietHours = hour < 9 || hour >= 21
-        say(next.text, speak: !quietHours)
+        say(next.text, speak: !quietHours, action: next == .sleep ? .nap : .wave)
     }
 
     @objc private func petTapped() {
@@ -282,9 +383,14 @@ private final class SpriteAtlas {
             "你已经很努力啦，停一会儿也没关系。",
             "要不要看一眼窗外？我陪你发会儿呆。"
         ]
-        say(comforts.randomElement() ?? comforts[0])
+        say(comforts.randomElement() ?? comforts[0], action: [.wave, .hop, .cuddle, .curious].randomElement() ?? .wave)
     }
     @objc private func sayHello() { say("你好呀，我会安静陪着你。") }
+    @objc private func playMenuAction(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String,
+              let action = PetAction(rawValue: name) else { return }
+        startAction(action)
+    }
     @objc private func showTip() {
         let tips = [
             "让屏幕处在舒适高度，肩膀放松，手腕尽量保持自然。",
