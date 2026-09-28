@@ -14,6 +14,36 @@
 
 将整个目录复制到 `~/.codex/pets/nahida-companion/`，确保 `pet.json` 与 `spritesheet.webp` 位于同一目录。宠物动作何时播放由 Codex 的状态机制决定，图集本身不检测用户是否暂停工作。
 
+## macOS 互动伴侣（源码）
+
+`companion-app/` 是独立的本地 macOS 程序。它使用同一张图集，不依赖 Codex 桌面宠物的动画触发：
+
+- 鼠标移动时，从 16 个朝向帧中选择对应方向；停止移动后恢复眨眼待机，深夜安静时闭眼休息。
+- 点击宠物或菜单中的“和小纳西妲说话”，显示文字并使用 macOS 系统语音朗读。菜单可关闭语音。
+- 护眼、起身、喝水、下午咖啡因和睡前提醒先排队；只有系统检测到至少 30 秒无键鼠操作后才出现，至少相隔 15 分钟。可关闭提醒或选“安静一小时”。
+- 不采集键入内容，不上传鼠标轨迹或健康信息；只读取本机鼠标位置和系统提供的最近操作间隔。
+
+在 macOS 13 或更新版本安装 Xcode Command Line Tools 后：
+
+```bash
+cd companion-app
+./build-app.sh
+open dist/NahidaCompanion.app
+```
+
+程序在菜单栏显示 `🌿`。退出程序可从菜单栏选“退出”。若只想用 Codex 内置宠物，无需运行这个程序。它目前提供预写的关怀语句及系统语音，不是独立的 AI 对话服务。
+
+### 提醒内容的依据
+
+提醒是可选的生活习惯提示，不作疾病诊断或风险预测。时间间隔是产品默认值，可根据个人情况调整源码：
+
+- 久坐时增加活动、每周 150 分钟中等强度运动与 2 天力量训练：[CDC 身体活动建议](https://www.cdc.gov/physical-activity-basics/adding-adults/)、[WHO 久坐指南](https://www.who.int/publications-detail-redirect/9789240015128)。
+- 屏幕休息、眨眼和干眼护理：[美国眼科学会 EyeWiki 数字眼疲劳综述](https://eyewiki.aao.org/Computer_Vision_Syndrome_%28Digital_Eye_Strain%29)。屏幕不适不能简单归因于蓝光。
+- 键盘位置、手腕中立姿势和屏幕高度：[OSHA 键盘人体工学](https://www.osha.gov/etools/computer-workstations/components/keyboards)、[OSHA 桌面工作站](https://www.osha.gov/etools/computer-workstations/components/desks)。
+- 成人通常每晚至少 7 小时睡眠，注意规律作息及下午／晚间咖啡因：[CDC 睡眠建议](https://www.cdc.gov/sleep/about/)。
+
+未把“程序员熬夜会猝死”“必须 24:00 前入睡”“每小时固定喝 200 ml”“所有人都该穿压力袜／每年查甲状腺”写成提醒，因为这些说法需要结合个人情况，不能从现有材料推出统一规则。
+
 ## 说明
 
 这是 AI 辅助制作的非官方同人作品，与游戏发行方无关联。仓库未附开放授权许可。
