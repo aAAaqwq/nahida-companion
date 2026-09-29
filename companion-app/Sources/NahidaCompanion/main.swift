@@ -64,6 +64,34 @@ private enum PetAction: String, CaseIterable {
     var frameDuration: TimeInterval { self == .nap ? 0.25 : 0.17 }
 }
 
+private enum MotionPace: String, CaseIterable {
+    case calm, normal, lively
+
+    var title: String {
+        switch self {
+        case .calm: "舒缓"
+        case .normal: "适中"
+        case .lively: "活泼"
+        }
+    }
+
+    var durationMultiplier: Double {
+        switch self {
+        case .calm: 1.6
+        case .normal: 1.0
+        case .lively: 0.8
+        }
+    }
+
+    var idleHoldTicks: Int {
+        switch self {
+        case .calm: 5
+        case .normal: 3
+        case .lively: 2
+        }
+    }
+}
+
 private enum Reminder: String, CaseIterable {
     case eyes, move, water, caffeine, sleep
 
@@ -191,6 +219,7 @@ private final class SpriteAtlas {
     private var speechItem: NSMenuItem!
     private var systemReadingItem: NSMenuItem!
     private var reminderItem: NSMenuItem!
+    private var paceItems: [MotionPace: NSMenuItem] = [:]
     private var atlas: SpriteAtlas!
     private let speaker = AVSpeechSynthesizer()
     private var originalPlayer: AVAudioPlayer?
@@ -219,6 +248,7 @@ private final class SpriteAtlas {
     private var speechEnabled = true
     private var systemReadingEnabled = false
     private var remindersEnabled = true
+    private var motionPace: MotionPace = .calm
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -235,6 +265,8 @@ private final class SpriteAtlas {
         speechEnabled = UserDefaults.standard.object(forKey: "speechEnabled") as? Bool ?? true
         systemReadingEnabled = UserDefaults.standard.object(forKey: "systemReadingEnabled") as? Bool ?? false
         remindersEnabled = UserDefaults.standard.object(forKey: "remindersEnabled") as? Bool ?? true
+        motionPace = UserDefaults.standard.string(forKey: "motionPace")
+            .flatMap(MotionPace.init(rawValue:)) ?? .calm
         buildPanel()
         buildMenu()
         panel.orderFrontRegardless()
@@ -341,7 +373,7 @@ private final class SpriteAtlas {
     }
 
     private func showDragFrame(at now: Date) {
-        guard now.timeIntervalSince(lastDragFrameAt) >= 0.12 else { return }
+        guard now.timeIntervalSince(lastDragFrameAt) >= 0.12 * motionPace.durationMultiplier else { return }
         let vertical = abs(dragDelta.y) > abs(dragDelta.x) * 1.2
         let row = vertical ? 4 : (dragDelta.x < 0 ? 2 : 1)
         let count = vertical ? 5 : 8
@@ -391,6 +423,18 @@ private final class SpriteAtlas {
         }
         actionItem.submenu = actionMenu
         menu.addItem(actionItem)
+        let paceItem = NSMenuItem(title: "动作节奏", action: nil, keyEquivalent: "")
+        let paceMenu = NSMenu()
+        for pace in MotionPace.allCases {
+            let item = NSMenuItem(title: pace.title, action: #selector(selectMotionPace(_:)), keyEquivalent: "")
+            item.representedObject = pace.rawValue
+            item.state = pace == motionPace ? .on : .off
+            item.target = self
+            paceItems[pace] = item
+            paceMenu.addItem(item)
+        }
+        paceItem.submenu = paceMenu
+        menu.addItem(paceItem)
         menu.addItem(NSMenuItem(title: "安静一小时", action: #selector(snooze), keyEquivalent: "s"))
         menu.addItem(.separator())
         speechItem = NSMenuItem(title: "语音", action: #selector(toggleSpeech), keyEquivalent: "")
@@ -423,8 +467,14 @@ private final class SpriteAtlas {
 
     private func showAction(_ action: PetAction, at now: Date) -> Bool {
         let steps = action.steps
-        let index = Int(now.timeIntervalSince(actionStartedAt) / action.frameDuration)
+        let index = Int(now.timeIntervalSince(actionStartedAt) /
+                        (action.frameDuration * motionPace.durationMultiplier))
         guard index < steps.count else {
+            if pendingDialogue != nil, originalPlayer?.isPlaying == true,
+               let final = steps.last {
+                showFrame(row: final.row, column: final.column)
+                return true
+            }
             activeAction = nil
             actionIsAmbient = false
             imageView.frame.origin.x = 54
@@ -486,8 +536,9 @@ private final class SpriteAtlas {
             if (hour >= 23 || hour < 8) && idle > 300 {
                 showFrame(row: 0, column: 2)
             } else {
-                showFrame(row: 0, column: (frameIndex / 3) % 6)
-                frameIndex = (frameIndex + 1) % 18
+                let hold = motionPace.idleHoldTicks
+                showFrame(row: 0, column: (frameIndex / hold) % 6)
+                frameIndex = (frameIndex + 1) % (6 * hold)
             }
         }
     }
@@ -655,6 +706,16 @@ private final class SpriteAtlas {
         guard let name = sender.representedObject as? String,
               let action = PetAction(rawValue: name) else { return }
         startAction(action)
+    }
+    @objc private func selectMotionPace(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String,
+              let pace = MotionPace(rawValue: name) else { return }
+        motionPace = pace
+        frameIndex = 0
+        if activeAction != nil { actionStartedAt = Date() }
+        lastDragFrameAt = .distantPast
+        for (option, item) in paceItems { item.state = option == pace ? .on : .off }
+        UserDefaults.standard.set(pace.rawValue, forKey: "motionPace")
     }
     @objc private func showTip() {
         let tips = [
