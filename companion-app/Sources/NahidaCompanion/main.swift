@@ -87,6 +87,33 @@ private enum Reminder: String, CaseIterable {
     }
 }
 
+private enum OriginalClip: String, CaseIterable {
+    case greeting, celebrate, birthday
+
+    var title: String {
+        switch self {
+        case .greeting: "可算找到你了"
+        case .celebrate: "花神诞祭"
+        case .birthday: "生日快乐"
+        }
+    }
+
+    var caption: String {
+        switch self {
+        case .greeting: "神明啊，可算找到你了。大家都期待与你见面。"
+        case .celebrate: "花神诞祭开幕了，大家快乐地转着圈。"
+        case .birthday: "生日快乐，纳西妲。"
+        }
+    }
+
+    var action: PetAction {
+        switch self {
+        case .greeting: .curious
+        case .celebrate, .birthday: .celebrate
+        }
+    }
+}
+
 private final class SpriteAtlas {
     private let image: CGImage
     private var cachedFrames: [Int: NSImage] = [:]
@@ -162,9 +189,11 @@ private final class SpriteAtlas {
     private var bubbleLabel: NSTextField!
     private var statusItem: NSStatusItem!
     private var speechItem: NSMenuItem!
+    private var systemReadingItem: NSMenuItem!
     private var reminderItem: NSMenuItem!
     private var atlas: SpriteAtlas!
     private let speaker = AVSpeechSynthesizer()
+    private var originalPlayer: AVAudioPlayer?
     private var activeAction: PetAction?
     private var actionIsAmbient = false
     private var actionStartedAt = Date.distantPast
@@ -185,6 +214,7 @@ private final class SpriteAtlas {
     private var frameTimer: Timer?
     private var reminderTimer: Timer?
     private var speechEnabled = true
+    private var systemReadingEnabled = false
     private var remindersEnabled = true
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -200,6 +230,7 @@ private final class SpriteAtlas {
         }
         atlas = loaded
         speechEnabled = UserDefaults.standard.object(forKey: "speechEnabled") as? Bool ?? true
+        systemReadingEnabled = UserDefaults.standard.object(forKey: "systemReadingEnabled") as? Bool ?? false
         remindersEnabled = UserDefaults.standard.object(forKey: "remindersEnabled") as? Bool ?? true
         buildPanel()
         buildMenu()
@@ -335,7 +366,17 @@ private final class SpriteAtlas {
         statusItem.button?.title = "🌿"
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "和小纳西妲说话", action: #selector(sayHello), keyEquivalent: "h"))
-        menu.addItem(NSMenuItem(title: "试听软萌音色", action: #selector(previewVoice), keyEquivalent: ""))
+        let originalItem = NSMenuItem(title: "听听原声片段", action: nil, keyEquivalent: "")
+        let originalMenu = NSMenu()
+        for clip in OriginalClip.allCases {
+            let item = NSMenuItem(title: clip.title, action: #selector(playOriginalClipMenu(_:)), keyEquivalent: "")
+            item.representedObject = clip.rawValue
+            item.target = self
+            originalMenu.addItem(item)
+        }
+        originalItem.submenu = originalMenu
+        menu.addItem(originalItem)
+        menu.addItem(NSMenuItem(title: "试听系统朗读", action: #selector(previewVoice), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "今日小建议", action: #selector(showTip), keyEquivalent: "t"))
         let actionItem = NSMenuItem(title: "看看小动作", action: nil, keyEquivalent: "")
         let actionMenu = NSMenu()
@@ -350,10 +391,13 @@ private final class SpriteAtlas {
         menu.addItem(NSMenuItem(title: "安静一小时", action: #selector(snooze), keyEquivalent: "s"))
         menu.addItem(.separator())
         speechItem = NSMenuItem(title: "语音", action: #selector(toggleSpeech), keyEquivalent: "")
+        systemReadingItem = NSMenuItem(title: "系统朗读提醒与文字", action: #selector(toggleSystemReading), keyEquivalent: "")
         reminderItem = NSMenuItem(title: "温和提醒", action: #selector(toggleReminders), keyEquivalent: "")
         speechItem.state = speechEnabled ? .on : .off
+        systemReadingItem.state = systemReadingEnabled ? .on : .off
         reminderItem.state = remindersEnabled ? .on : .off
         menu.addItem(speechItem)
+        menu.addItem(systemReadingItem)
         menu.addItem(reminderItem)
         menu.addItem(NSMenuItem(title: "显示／隐藏", action: #selector(toggleWindow), keyEquivalent: "p"))
         menu.addItem(NSMenuItem(title: "重置宠物位置", action: #selector(resetPosition), keyEquivalent: ""))
@@ -445,20 +489,56 @@ private final class SpriteAtlas {
         }
     }
 
-    private func say(_ message: String, speak: Bool = true, action: PetAction = .wave, preview: Bool = false) {
+    private func showBubble(_ message: String, action: PetAction) {
         bubbleLabel.stringValue = message
         bubble.isHidden = false
         bubbleEndsAt = Date().addingTimeInterval(8)
         startAction(action)
         panel.orderFrontRegardless()
-        if speak && (speechEnabled || preview) {
+    }
+
+    private func originalClipURL(_ clip: OriginalClip) -> URL? {
+        let environment = ProcessInfo.processInfo.environment["NAHIDA_VOICE_DIR"].flatMap {
+            $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true)
+        }
+        let bundled = Bundle.main.resourceURL?.appendingPathComponent("Voice", isDirectory: true)
+        let personal = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/pets/nahida-companion/voice", isDirectory: true)
+        for directory in [environment, bundled, personal].compactMap({ $0 }) {
+            let url = directory.appendingPathComponent("\(clip.rawValue).m4a")
+            if FileManager.default.isReadableFile(atPath: url.path) { return url }
+        }
+        return nil
+    }
+
+    @discardableResult private func playOriginalClip(_ clip: OriginalClip) -> Bool {
+        guard let url = originalClipURL(clip) else { return false }
+        speaker.stopSpeaking(at: .immediate)
+        originalPlayer?.stop()
+        showBubble(clip.caption, action: clip.action)
+        guard speechEnabled else { return true }
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.prepareToPlay()
+            originalPlayer = player
+            return player.play()
+        } catch {
+            showBubble("原声片段暂时无法播放。", action: .curious)
+            return false
+        }
+    }
+
+    private func say(_ message: String, speak: Bool = true, action: PetAction = .wave, preview: Bool = false) {
+        originalPlayer?.stop()
+        showBubble(message, action: action)
+        if speak && speechEnabled && (systemReadingEnabled || preview) {
             speaker.stopSpeaking(at: .immediate)
             let utterance = AVSpeechUtterance(string: message)
             let preferred = AVSpeechSynthesisVoice(identifier: "com.apple.siri.natural.Linfei")
             let fallback = AVSpeechSynthesisVoice(identifier: "com.apple.voice.compact.zh-CN.Tingting")
             utterance.voice = preferred ?? fallback ?? AVSpeechSynthesisVoice(language: "zh-CN")
-            utterance.pitchMultiplier = 1.18
-            utterance.rate = 0.46
+            utterance.pitchMultiplier = 1.0
+            utterance.rate = 0.48
             speaker.speak(utterance)
         }
     }
@@ -491,7 +571,7 @@ private final class SpriteAtlas {
                 lastDailyKey[reminder] = today
             }
         }
-        guard idleSeconds() >= 30, !pending.isEmpty,
+        guard idleSeconds() >= 30, originalPlayer?.isPlaying != true, !pending.isEmpty,
               now.timeIntervalSince(lastDeliveredAt) >= 15 * 60 else { return }
         let next = pending.removeFirst()
         pending.removeAll()
@@ -501,15 +581,26 @@ private final class SpriteAtlas {
     }
 
     @objc private func petTapped() {
+        if let clip = [OriginalClip.greeting, .celebrate].randomElement(), playOriginalClip(clip) { return }
         let comforts = [
-            "我在呢。工作累了就休息一下吧。",
-            "先松松肩膀，好吗？我会在这里陪你。",
-            "你已经很努力啦，停一会儿也没关系。",
-            "要不要看一眼窗外？我陪你发会儿呆。"
+            "我在呢。忙完这一阵，就一起伸个懒腰吧。",
+            "先松松肩膀，好吗？我会安静陪着你。",
+            "今天的好奇心也辛苦啦，停一会儿也没关系。",
+            "要不要看一眼窗外？我陪你发会儿呆。",
+            "揉揉眼睛之前，先试着多眨几下眼吧。"
         ]
         say(comforts.randomElement() ?? comforts[0], action: [.wave, .hop, .cuddle, .curious].randomElement() ?? .wave)
     }
-    @objc private func sayHello() { say("你好呀，我会安静陪着你。") }
+    @objc private func sayHello() {
+        if !playOriginalClip(.greeting) { say("你好呀，我会安静陪着你。") }
+    }
+    @objc private func playOriginalClipMenu(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String,
+              let clip = OriginalClip(rawValue: name) else { return }
+        if !playOriginalClip(clip) {
+            say("还没有安装本地原声片段。请查看 README 的语音安装说明。", speak: false, action: .curious)
+        }
+    }
     @objc private func previewVoice() {
         say("嘿嘿，我在这里呀。今天也要好好照顾自己哦。", action: .cuddle, preview: true)
     }
@@ -520,14 +611,14 @@ private final class SpriteAtlas {
     }
     @objc private func showTip() {
         let tips = [
-            "让屏幕处在舒适高度，肩膀放松，手腕尽量保持自然。",
-            "这周可以找两天做力量训练，也别忘了走走路。",
-            "成年人通常需要每晚至少七小时睡眠；规律作息也很重要。",
-            "屏幕看久了，看看远处、眨眨眼。",
-            "写代码时留意坐姿，隔一会儿起身活动。",
-            "今天出门走走、晒晒自然光，也许会舒服些。",
-            "给自己安排一点离线时间，让大脑休息一下。",
-            "如果手腕或腰背持续疼痛，尽早请专业人士评估。"
+            "抬头看看屏幕的位置，肩膀放松，手腕自然地放平。",
+            "小纸条：这周找两天练练力量，也留点时间散步。",
+            "夜晚也要留给梦。成年人通常需要至少七小时睡眠。",
+            "眼睛也会累呀。看看远处，再轻轻眨眨眼。",
+            "代码可以慢慢写，我们先起身走动两分钟。",
+            "今天若有空，出去走走、晒晒自然光吧。",
+            "给脑袋留一点离线时间，灵感也许会悄悄回来。",
+            "手腕或腰背一直疼的话，记得找专业人士看看。"
         ]
         say(tips.randomElement() ?? tips[0])
     }
@@ -540,7 +631,16 @@ private final class SpriteAtlas {
         speechEnabled.toggle()
         speechItem.state = speechEnabled ? .on : .off
         UserDefaults.standard.set(speechEnabled, forKey: "speechEnabled")
-        if !speechEnabled { speaker.stopSpeaking(at: .immediate) }
+        if !speechEnabled {
+            speaker.stopSpeaking(at: .immediate)
+            originalPlayer?.stop()
+        }
+    }
+    @objc private func toggleSystemReading() {
+        systemReadingEnabled.toggle()
+        systemReadingItem.state = systemReadingEnabled ? .on : .off
+        UserDefaults.standard.set(systemReadingEnabled, forKey: "systemReadingEnabled")
+        if !systemReadingEnabled { speaker.stopSpeaking(at: .immediate) }
     }
     @objc private func toggleReminders() {
         remindersEnabled.toggle()
