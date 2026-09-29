@@ -117,6 +117,8 @@ private final class SpriteAtlas {
 
 @MainActor private final class DraggablePetView: NSImageView {
     var onTap: (() -> Void)?
+    var onDragStart: (() -> Void)?
+    var onDrag: ((CGFloat, CGFloat) -> Void)?
     var onDragEnd: (() -> Void)?
     private var mouseDownAt: NSPoint?
     private var windowOriginAtMouseDown: NSPoint?
@@ -135,9 +137,13 @@ private final class SpriteAtlas {
         let current = NSEvent.mouseLocation
         let dx = current.x - start.x
         let dy = current.y - start.y
-        if hypot(dx, dy) >= 4 { didDrag = true }
+        if !didDrag && hypot(dx, dy) >= 4 {
+            didDrag = true
+            onDragStart?()
+        }
         if didDrag {
             window?.setFrameOrigin(NSPoint(x: origin.x + dx, y: origin.y + dy))
+            onDrag?(dx, dy)
         }
     }
 
@@ -164,6 +170,10 @@ private final class SpriteAtlas {
     private var actionStartedAt = Date.distantPast
     private var nextAmbientAt = Date().addingTimeInterval(60)
     private var frameIndex = 0
+    private var isDraggingPet = false
+    private var dragDelta = NSPoint.zero
+    private var dragFrameIndex = 0
+    private var lastDragFrameAt = Date.distantPast
     private var bubbleEndsAt = Date.distantPast
     private var lastCursor = NSEvent.mouseLocation
     private var lastCursorMoveAt = Date.distantPast
@@ -195,7 +205,8 @@ private final class SpriteAtlas {
         buildMenu()
         panel.orderFrontRegardless()
         showFrame(row: 0, column: 0)
-        frameTimer = Timer.scheduledTimer(timeInterval: 0.16, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
+        frameTimer = Timer(timeInterval: 0.16, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
+        RunLoop.main.add(frameTimer!, forMode: .common)
         reminderTimer = Timer.scheduledTimer(timeInterval: 10, target: self, selector: #selector(checkReminders), userInfo: nil, repeats: true)
     }
 
@@ -229,7 +240,9 @@ private final class SpriteAtlas {
         imageView = DraggablePetView(frame: NSRect(x: 54, y: 0, width: 192, height: 208))
         imageView.imageScaling = .scaleNone
         imageView.onTap = { [weak self] in self?.petTapped() }
-        imageView.onDragEnd = { [weak self] in self?.savePanelOrigin() }
+        imageView.onDragStart = { [weak self] in self?.beginDragging() }
+        imageView.onDrag = { [weak self] dx, dy in self?.dragMoved(dx: dx, dy: dy) }
+        imageView.onDragEnd = { [weak self] in self?.endDragging() }
         root.addSubview(imageView)
 
         bubble = NSView(frame: NSRect(x: 8, y: 220, width: 284, height: 72))
@@ -269,11 +282,42 @@ private final class SpriteAtlas {
         UserDefaults.standard.set(Double(panel.frame.minY), forKey: "windowY")
     }
 
+    private func beginDragging() {
+        isDraggingPet = true
+        activeAction = nil
+        actionIsAmbient = false
+        dragFrameIndex = 0
+        lastDragFrameAt = .distantPast
+        imageView.frame.origin.x = 54
+    }
+
+    private func dragMoved(dx: CGFloat, dy: CGFloat) {
+        dragDelta = NSPoint(x: dx, y: dy)
+        showDragFrame(at: Date())
+    }
+
+    private func showDragFrame(at now: Date) {
+        guard now.timeIntervalSince(lastDragFrameAt) >= 0.12 else { return }
+        let vertical = abs(dragDelta.y) > abs(dragDelta.x) * 1.2
+        let row = vertical ? 4 : (dragDelta.x < 0 ? 2 : 1)
+        let count = vertical ? 5 : 8
+        showFrame(row: row, column: dragFrameIndex % count)
+        dragFrameIndex += 1
+        lastDragFrameAt = now
+    }
+
+    private func endDragging() {
+        isDraggingPet = false
+        savePanelOrigin()
+        startAction(.hop)
+    }
+
     private func buildMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "🌿"
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "和小纳西妲说话", action: #selector(sayHello), keyEquivalent: "h"))
+        menu.addItem(NSMenuItem(title: "试听软萌音色", action: #selector(previewVoice), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "今日小建议", action: #selector(showTip), keyEquivalent: "t"))
         let actionItem = NSMenuItem(title: "看看小动作", action: nil, keyEquivalent: "")
         let actionMenu = NSMenu()
@@ -330,6 +374,10 @@ private final class SpriteAtlas {
     @objc private func tick() {
         let now = Date()
         if !bubble.isHidden && now >= bubbleEndsAt { bubble.isHidden = true }
+        if isDraggingPet {
+            showDragFrame(at: now)
+            return
+        }
         let cursor = NSEvent.mouseLocation
         if hypot(cursor.x - lastCursor.x, cursor.y - lastCursor.y) >= 2 {
             lastCursor = cursor
@@ -378,17 +426,20 @@ private final class SpriteAtlas {
         }
     }
 
-    private func say(_ message: String, speak: Bool = true, action: PetAction = .wave) {
+    private func say(_ message: String, speak: Bool = true, action: PetAction = .wave, preview: Bool = false) {
         bubbleLabel.stringValue = message
         bubble.isHidden = false
         bubbleEndsAt = Date().addingTimeInterval(8)
         startAction(action)
         panel.orderFrontRegardless()
-        if speak && speechEnabled {
+        if speak && (speechEnabled || preview) {
             speaker.stopSpeaking(at: .immediate)
             let utterance = AVSpeechUtterance(string: message)
-            utterance.voice = AVSpeechSynthesisVoice(language: "zh-CN")
-            utterance.rate = 0.48
+            let preferred = AVSpeechSynthesisVoice(identifier: "com.apple.siri.natural.Linfei")
+            let fallback = AVSpeechSynthesisVoice(identifier: "com.apple.voice.compact.zh-CN.Tingting")
+            utterance.voice = preferred ?? fallback ?? AVSpeechSynthesisVoice(language: "zh-CN")
+            utterance.pitchMultiplier = 1.18
+            utterance.rate = 0.46
             speaker.speak(utterance)
         }
     }
@@ -440,6 +491,9 @@ private final class SpriteAtlas {
         say(comforts.randomElement() ?? comforts[0], action: [.wave, .hop, .cuddle, .curious].randomElement() ?? .wave)
     }
     @objc private func sayHello() { say("你好呀，我会安静陪着你。") }
+    @objc private func previewVoice() {
+        say("嘿嘿，我在这里呀。今天也要好好照顾自己哦。", action: .cuddle, preview: true)
+    }
     @objc private func playMenuAction(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String,
               let action = PetAction(rawValue: name) else { return }
