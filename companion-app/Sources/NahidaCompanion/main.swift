@@ -48,8 +48,8 @@ private enum PetAction: String, CaseIterable {
              SpriteStep(9, 2), SpriteStep(9, 0), SpriteStep(10, 6),
              SpriteStep(10, 4), SpriteStep(10, 6), SpriteStep(9, 0)]
         case .stroll:
-            (0..<8).map { SpriteStep(1, $0, CGFloat($0) * 3) } +
-            (0..<8).map { SpriteStep(2, $0, CGFloat(7 - $0) * 3) }
+            (0..<8).map { SpriteStep(1, $0, CGFloat($0) * 6) } +
+            (0..<8).map { SpriteStep(2, $0, CGFloat(7 - $0) * 6) }
         case .focus:
             [0, 1, 2, 3, 4, 5, 4, 3, 2, 1, 0].map { SpriteStep(7, $0) }
         case .celebrate:
@@ -115,9 +115,43 @@ private final class SpriteAtlas {
     }
 }
 
+@MainActor private final class DraggablePetView: NSImageView {
+    var onTap: (() -> Void)?
+    var onDragEnd: (() -> Void)?
+    private var mouseDownAt: NSPoint?
+    private var windowOriginAtMouseDown: NSPoint?
+    private var didDrag = false
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownAt = NSEvent.mouseLocation
+        windowOriginAtMouseDown = window?.frame.origin
+        didDrag = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = mouseDownAt, let origin = windowOriginAtMouseDown else { return }
+        let current = NSEvent.mouseLocation
+        let dx = current.x - start.x
+        let dy = current.y - start.y
+        if hypot(dx, dy) >= 4 { didDrag = true }
+        if didDrag {
+            window?.setFrameOrigin(NSPoint(x: origin.x + dx, y: origin.y + dy))
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if didDrag { onDragEnd?() } else { onTap?() }
+        mouseDownAt = nil
+        windowOriginAtMouseDown = nil
+        didDrag = false
+    }
+}
+
 @MainActor private final class Companion: NSObject, NSApplicationDelegate {
     private var panel: NSPanel!
-    private var imageView: NSImageView!
+    private var imageView: DraggablePetView!
     private var bubble: NSView!
     private var bubbleLabel: NSTextField!
     private var statusItem: NSStatusItem!
@@ -177,8 +211,7 @@ private final class SpriteAtlas {
 
     private func buildPanel() {
         let size = NSSize(width: 300, height: 300)
-        let visible = NSScreen.main?.visibleFrame ?? .zero
-        let origin = NSPoint(x: visible.maxX - size.width - 24, y: visible.minY + 24)
+        let origin = savedOrigin(for: size) ?? defaultOrigin(for: size)
         panel = NSPanel(contentRect: NSRect(origin: origin, size: size),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .floating
@@ -186,16 +219,17 @@ private final class SpriteAtlas {
         panel.isOpaque = false
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
-        panel.isMovableByWindowBackground = true
+        panel.isMovableByWindowBackground = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         let root = NSView(frame: NSRect(origin: .zero, size: size))
         root.wantsLayer = true
         panel.contentView = root
 
-        imageView = NSImageView(frame: NSRect(x: 54, y: 0, width: 192, height: 208))
+        imageView = DraggablePetView(frame: NSRect(x: 54, y: 0, width: 192, height: 208))
         imageView.imageScaling = .scaleNone
-        imageView.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(petTapped)))
+        imageView.onTap = { [weak self] in self?.petTapped() }
+        imageView.onDragEnd = { [weak self] in self?.savePanelOrigin() }
         root.addSubview(imageView)
 
         bubble = NSView(frame: NSRect(x: 8, y: 220, width: 284, height: 72))
@@ -214,6 +248,25 @@ private final class SpriteAtlas {
         bubble.addSubview(bubbleLabel)
         bubble.isHidden = true
         root.addSubview(bubble)
+    }
+
+    private func defaultOrigin(for size: NSSize) -> NSPoint {
+        let visible = NSScreen.main?.visibleFrame ?? .zero
+        return NSPoint(x: visible.maxX - size.width - 24, y: visible.minY + 24)
+    }
+
+    private func savedOrigin(for size: NSSize) -> NSPoint? {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: "windowX") != nil,
+              defaults.object(forKey: "windowY") != nil else { return nil }
+        let origin = NSPoint(x: defaults.double(forKey: "windowX"), y: defaults.double(forKey: "windowY"))
+        let savedFrame = NSRect(origin: origin, size: size)
+        return NSScreen.screens.contains { $0.visibleFrame.intersects(savedFrame) } ? origin : nil
+    }
+
+    private func savePanelOrigin() {
+        UserDefaults.standard.set(Double(panel.frame.minX), forKey: "windowX")
+        UserDefaults.standard.set(Double(panel.frame.minY), forKey: "windowY")
     }
 
     private func buildMenu() {
@@ -241,6 +294,7 @@ private final class SpriteAtlas {
         menu.addItem(speechItem)
         menu.addItem(reminderItem)
         menu.addItem(NSMenuItem(title: "显示／隐藏", action: #selector(toggleWindow), keyEquivalent: "p"))
+        menu.addItem(NSMenuItem(title: "重置宠物位置", action: #selector(resetPosition), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q"))
         for item in menu.items { item.target = self }
@@ -423,6 +477,11 @@ private final class SpriteAtlas {
     }
     @objc private func toggleWindow() {
         if panel.isVisible { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
+    }
+    @objc private func resetPosition() {
+        panel.setFrameOrigin(defaultOrigin(for: panel.frame.size))
+        savePanelOrigin()
+        panel.orderFrontRegardless()
     }
     @objc private func quit() { NSApp.terminate(nil) }
 }
