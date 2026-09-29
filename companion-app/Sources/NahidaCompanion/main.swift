@@ -239,6 +239,7 @@ private final class SpriteAtlas {
 
         imageView = DraggablePetView(frame: NSRect(x: 54, y: 0, width: 192, height: 208))
         imageView.imageScaling = .scaleNone
+        imageView.setAccessibilityLabel("小纳西妲，待机")
         imageView.onTap = { [weak self] in self?.petTapped() }
         imageView.onDragStart = { [weak self] in self?.beginDragging() }
         imageView.onDrag = { [weak self] dx, dy in self?.dragMoved(dx: dx, dy: dy) }
@@ -274,7 +275,16 @@ private final class SpriteAtlas {
               defaults.object(forKey: "windowY") != nil else { return nil }
         let origin = NSPoint(x: defaults.double(forKey: "windowX"), y: defaults.double(forKey: "windowY"))
         let savedFrame = NSRect(origin: origin, size: size)
-        return NSScreen.screens.contains { $0.visibleFrame.intersects(savedFrame) } ? origin : nil
+        guard let screen = NSScreen.screens.first(where: { $0.visibleFrame.intersects(savedFrame) }) else { return nil }
+        return originClampedToScreen(origin, size: size, screen: screen)
+    }
+
+    private func originClampedToScreen(_ origin: NSPoint, size: NSSize, screen: NSScreen) -> NSPoint {
+        let visible = screen.visibleFrame
+        return NSPoint(
+            x: min(max(origin.x, visible.minX), visible.maxX - size.width),
+            y: min(max(origin.y, visible.minY), visible.maxY - size.height)
+        )
     }
 
     private func savePanelOrigin() {
@@ -301,6 +311,7 @@ private final class SpriteAtlas {
         let vertical = abs(dragDelta.y) > abs(dragDelta.x) * 1.2
         let row = vertical ? 4 : (dragDelta.x < 0 ? 2 : 1)
         let count = vertical ? 5 : 8
+        imageView.setAccessibilityLabel(vertical ? "小纳西妲，拖动时轻跳" : (row == 2 ? "小纳西妲，向左跑动" : "小纳西妲，向右跑动"))
         showFrame(row: row, column: dragFrameIndex % count)
         dragFrameIndex += 1
         lastDragFrameAt = now
@@ -308,7 +319,14 @@ private final class SpriteAtlas {
 
     private func endDragging() {
         isDraggingPet = false
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) })
+            ?? NSScreen.screens.first(where: { $0.frame.intersects(panel.frame) })
+            ?? NSScreen.main
+        if let screen {
+            panel.setFrameOrigin(originClampedToScreen(panel.frame.origin, size: panel.frame.size, screen: screen))
+        }
         savePanelOrigin()
+        imageView.setAccessibilityLabel("小纳西妲，拖动完成后轻跳")
         startAction(.hop)
     }
 
@@ -363,6 +381,7 @@ private final class SpriteAtlas {
             activeAction = nil
             actionIsAmbient = false
             imageView.frame.origin.x = 54
+            imageView.setAccessibilityLabel("小纳西妲，待机")
             return false
         }
         let step = steps[index]
