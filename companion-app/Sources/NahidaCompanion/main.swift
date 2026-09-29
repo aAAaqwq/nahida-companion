@@ -225,7 +225,6 @@ private final class SpriteAtlas {
     private var originalPlayer: AVAudioPlayer?
     private var dialogueTimer: Timer?
     private var pendingDialogue: (text: String, action: PetAction)?
-    private var lastAutomaticVoiceAt = Date.distantPast
     private var activeAction: PetAction?
     private var actionIsAmbient = false
     private var actionStartedAt = Date.distantPast
@@ -662,15 +661,7 @@ private final class SpriteAtlas {
         pending.removeAll()
         lastDeliveredAt = now
         let quietHours = hour < 9 || hour >= 21
-        let action: PetAction = next == .sleep ? .nap : .wave
-        let canUseOriginal = !quietHours && speechEnabled &&
-            now.timeIntervalSince(lastAutomaticVoiceAt) >= 60 * 60
-        let clip: OriginalClip = next == .move ? .celebrate : .greeting
-        if canUseOriginal && playDialogue(clip: clip, then: next.text, action: action) {
-            lastAutomaticVoiceAt = now
-        } else {
-            say(next.text, speak: !quietHours, action: action)
-        }
+        say(next.text, speak: !quietHours, action: next == .sleep ? .nap : .wave)
     }
 
     @objc private func petTapped() {
@@ -728,8 +719,7 @@ private final class SpriteAtlas {
             "给脑袋留一点离线时间，灵感也许会悄悄回来。",
             "手腕或腰背一直疼的话，记得找专业人士看看。"
         ]
-        let tip = tips.randomElement() ?? tips[0]
-        if !playDialogue(clip: .greeting, then: tip, action: .wave) { say(tip) }
+        say(tips.randomElement() ?? tips[0])
     }
     @objc private func snooze() {
         snoozeUntil = Date().addingTimeInterval(60 * 60)
