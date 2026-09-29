@@ -194,6 +194,9 @@ private final class SpriteAtlas {
     private var atlas: SpriteAtlas!
     private let speaker = AVSpeechSynthesizer()
     private var originalPlayer: AVAudioPlayer?
+    private var dialogueTimer: Timer?
+    private var pendingDialogue: (text: String, action: PetAction)?
+    private var lastAutomaticVoiceAt = Date.distantPast
     private var activeAction: PetAction?
     private var actionIsAmbient = false
     private var actionStartedAt = Date.distantPast
@@ -511,8 +514,15 @@ private final class SpriteAtlas {
         return nil
     }
 
+    private func cancelDialogue() {
+        dialogueTimer?.invalidate()
+        dialogueTimer = nil
+        pendingDialogue = nil
+    }
+
     @discardableResult private func playOriginalClip(_ clip: OriginalClip) -> Bool {
         guard let url = originalClipURL(clip) else { return false }
+        cancelDialogue()
         speaker.stopSpeaking(at: .immediate)
         originalPlayer?.stop()
         showBubble(clip.caption, action: clip.action)
@@ -528,7 +538,30 @@ private final class SpriteAtlas {
         }
     }
 
+    @discardableResult private func playDialogue(
+        clip: OriginalClip, then text: String, action: PetAction = .cuddle
+    ) -> Bool {
+        guard playOriginalClip(clip) else { return false }
+        guard speechEnabled, let duration = originalPlayer?.duration else {
+            say(text, speak: false, action: action)
+            return true
+        }
+        pendingDialogue = (text, action)
+        let timer = Timer(timeInterval: duration + 0.15, target: self,
+                          selector: #selector(finishDialogue), userInfo: nil, repeats: false)
+        dialogueTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        return true
+    }
+
+    @objc private func finishDialogue() {
+        guard let next = pendingDialogue else { return }
+        cancelDialogue()
+        say(next.text, action: next.action)
+    }
+
     private func say(_ message: String, speak: Bool = true, action: PetAction = .wave, preview: Bool = false) {
+        cancelDialogue()
         originalPlayer?.stop()
         showBubble(message, action: action)
         if speak && speechEnabled && (systemReadingEnabled || preview) {
@@ -571,17 +604,25 @@ private final class SpriteAtlas {
                 lastDailyKey[reminder] = today
             }
         }
-        guard idleSeconds() >= 30, originalPlayer?.isPlaying != true, !pending.isEmpty,
+        guard idleSeconds() >= 30, pendingDialogue == nil,
+              originalPlayer?.isPlaying != true, !pending.isEmpty,
               now.timeIntervalSince(lastDeliveredAt) >= 15 * 60 else { return }
         let next = pending.removeFirst()
         pending.removeAll()
         lastDeliveredAt = now
         let quietHours = hour < 9 || hour >= 21
-        say(next.text, speak: !quietHours, action: next == .sleep ? .nap : .wave)
+        let action: PetAction = next == .sleep ? .nap : .wave
+        let canUseOriginal = !quietHours && speechEnabled &&
+            now.timeIntervalSince(lastAutomaticVoiceAt) >= 60 * 60
+        let clip: OriginalClip = next == .move ? .celebrate : .greeting
+        if canUseOriginal && playDialogue(clip: clip, then: next.text, action: action) {
+            lastAutomaticVoiceAt = now
+        } else {
+            say(next.text, speak: !quietHours, action: action)
+        }
     }
 
     @objc private func petTapped() {
-        if let clip = [OriginalClip.greeting, .celebrate].randomElement(), playOriginalClip(clip) { return }
         let comforts = [
             "我在呢。忙完这一阵，就一起伸个懒腰吧。",
             "先松松肩膀，好吗？我会安静陪着你。",
@@ -589,10 +630,16 @@ private final class SpriteAtlas {
             "要不要看一眼窗外？我陪你发会儿呆。",
             "揉揉眼睛之前，先试着多眨几下眼吧。"
         ]
-        say(comforts.randomElement() ?? comforts[0], action: [.wave, .hop, .cuddle, .curious].randomElement() ?? .wave)
+        let comfort = comforts.randomElement() ?? comforts[0]
+        let clip = [OriginalClip.greeting, .celebrate].randomElement() ?? .greeting
+        if !playDialogue(clip: clip, then: comfort) {
+            say(comfort, action: [.wave, .hop, .cuddle, .curious].randomElement() ?? .wave)
+        }
     }
     @objc private func sayHello() {
-        if !playOriginalClip(.greeting) { say("你好呀，我会安静陪着你。") }
+        if !playDialogue(clip: .greeting, then: "你好呀，我会安静陪着你。") {
+            say("你好呀，我会安静陪着你。")
+        }
     }
     @objc private func playOriginalClipMenu(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String,
@@ -620,7 +667,8 @@ private final class SpriteAtlas {
             "给脑袋留一点离线时间，灵感也许会悄悄回来。",
             "手腕或腰背一直疼的话，记得找专业人士看看。"
         ]
-        say(tips.randomElement() ?? tips[0])
+        let tip = tips.randomElement() ?? tips[0]
+        if !playDialogue(clip: .greeting, then: tip, action: .wave) { say(tip) }
     }
     @objc private func snooze() {
         snoozeUntil = Date().addingTimeInterval(60 * 60)
@@ -634,6 +682,7 @@ private final class SpriteAtlas {
         if !speechEnabled {
             speaker.stopSpeaking(at: .immediate)
             originalPlayer?.stop()
+            finishDialogue()
         }
     }
     @objc private func toggleSystemReading() {
