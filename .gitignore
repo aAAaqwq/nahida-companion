@@ -2,6 +2,7 @@ companion-app/.build/
 companion-app/dist/
 companion-app/Voice/
 *.m4a
+!voice/*.m4a
 *.mp3
 *.wav
 *.mp4

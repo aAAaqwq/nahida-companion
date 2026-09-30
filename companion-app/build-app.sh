@@ -11,13 +11,14 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$SCRIPT_DIR/.build/release/NahidaCompanion" "$APP_DIR/Contents/MacOS/NahidaCompanion"
 cp "$ROOT_DIR/spritesheet.webp" "$APP_DIR/Contents/Resources/spritesheet.webp"
 rm -rf "$APP_DIR/Contents/Resources/Voice"
-if [[ -n "${NAHIDA_VOICE_DIR:-}" ]]; then
+VOICE_SOURCE_DIR="${NAHIDA_VOICE_DIR:-$ROOT_DIR/voice}"
+if [[ -d "$VOICE_SOURCE_DIR" ]]; then
   mkdir -p "$APP_DIR/Contents/Resources/Voice"
   for clip in greeting celebrate birthday \
     reminder-eyes reminder-move reminder-water reminder-caffeine reminder-sleep \
     tip-posture tip-strength tip-sleep tip-eyes tip-move tip-walk tip-offline tip-pain; do
-    if [[ -f "$NAHIDA_VOICE_DIR/$clip.m4a" ]]; then
-      cp "$NAHIDA_VOICE_DIR/$clip.m4a" "$APP_DIR/Contents/Resources/Voice/$clip.m4a"
+    if [[ -f "$VOICE_SOURCE_DIR/$clip.m4a" ]]; then
+      cp "$VOICE_SOURCE_DIR/$clip.m4a" "$APP_DIR/Contents/Resources/Voice/$clip.m4a"
     fi
   done
 fi

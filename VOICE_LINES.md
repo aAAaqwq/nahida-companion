@@ -1,6 +1,6 @@
 # 本地语音包台词
 
-将已获相应使用授权、朗读内容与下表完全相同的 M4A 文件放在 `~/.codex/pets/nahida-companion/voice/`，或通过 `NAHIDA_VOICE_DIR` 指定目录。每条文件只在其对应的文字气泡出现时播放。公开仓库不包含这些录音。
+仓库的 `voice/` 目录收录了下表的 13 段逐句配音。也可将自己有权使用、朗读内容与下表相同的 M4A 文件放在 `~/.codex/pets/nahida-companion/voice/`，或通过 `NAHIDA_VOICE_DIR` 指定目录在构建时替换。每条文件只在其对应的文字气泡出现时播放。
 
 | 文件名 | 对应文字 |
 | --- | --- |
