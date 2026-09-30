@@ -2,6 +2,8 @@
 
 一只以《原神》纳西妲为灵感的非官方同人桌面宠物。图像为本项目生成的动画素材，并非游戏原始素材。
 
+继续开发时先看 [项目交接与需求摘要](PROJECT_HANDOFF.md)。
+
 ## 内容
 
 - `pet.json`：Codex 自定义宠物配置，`spriteVersionNumber: 2`
