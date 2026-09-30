@@ -40,4 +40,6 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 plutil -lint "$APP_DIR/Contents/Info.plist"
+codesign --force --deep --sign - "$APP_DIR"
+codesign --verify --deep --strict "$APP_DIR"
 echo "$APP_DIR"
