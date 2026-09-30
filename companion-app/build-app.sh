@@ -13,8 +13,12 @@ cp "$ROOT_DIR/spritesheet.webp" "$APP_DIR/Contents/Resources/spritesheet.webp"
 rm -rf "$APP_DIR/Contents/Resources/Voice"
 if [[ -n "${NAHIDA_VOICE_DIR:-}" ]]; then
   mkdir -p "$APP_DIR/Contents/Resources/Voice"
-  for clip in greeting celebrate birthday; do
-    cp "$NAHIDA_VOICE_DIR/$clip.m4a" "$APP_DIR/Contents/Resources/Voice/$clip.m4a"
+  for clip in greeting celebrate birthday \
+    reminder-eyes reminder-move reminder-water reminder-caffeine reminder-sleep \
+    tip-posture tip-strength tip-sleep tip-eyes tip-move tip-walk tip-offline tip-pain; do
+    if [[ -f "$NAHIDA_VOICE_DIR/$clip.m4a" ]]; then
+      cp "$NAHIDA_VOICE_DIR/$clip.m4a" "$APP_DIR/Contents/Resources/Voice/$clip.m4a"
+    fi
   done
 fi
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
@@ -27,8 +31,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>小纳西妲</string>
   <key>CFBundleExecutable</key><string>NahidaCompanion</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.5.3</string>
-  <key>CFBundleVersion</key><string>10</string>
+  <key>CFBundleShortVersionString</key><string>0.6.0</string>
+  <key>CFBundleVersion</key><string>11</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSMinimumSystemVersion</key><string>13.0</string>

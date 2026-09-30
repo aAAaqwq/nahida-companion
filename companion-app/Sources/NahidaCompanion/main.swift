@@ -95,6 +95,16 @@ private enum MotionPace: String, CaseIterable {
 private enum Reminder: String, CaseIterable {
     case eyes, move, water, caffeine, sleep
 
+    var title: String {
+        switch self {
+        case .eyes: "护眼"
+        case .move: "起身走动"
+        case .water: "喝水"
+        case .caffeine: "下午咖啡因"
+        case .sleep: "睡眠"
+        }
+    }
+
     var text: String {
         switch self {
         case .eyes: "看向远处 20 秒，顺便眨眨眼，好吗？"
@@ -111,6 +121,23 @@ private enum Reminder: String, CaseIterable {
         case .move: 45 * 60
         case .water: 60 * 60
         case .caffeine, .sleep: nil
+        }
+    }
+}
+
+private enum Tip: String, CaseIterable {
+    case posture, strength, sleep, eyes, move, walk, offline, pain
+
+    var text: String {
+        switch self {
+        case .posture: "抬头看看屏幕的位置，肩膀放松，手腕自然地放平。"
+        case .strength: "小纸条：这周找两天练练力量，也留点时间散步。"
+        case .sleep: "夜晚也要留给梦。成年人通常需要至少七小时睡眠。"
+        case .eyes: "眼睛也会累呀。看看远处，再轻轻眨眨眼。"
+        case .move: "代码可以慢慢写，我们先起身走动两分钟。"
+        case .walk: "今天若有空，出去走走、晒晒自然光吧。"
+        case .offline: "给脑袋留一点离线时间，灵感也许会悄悄回来。"
+        case .pain: "手腕或腰背一直疼的话，记得找专业人士看看。"
         }
     }
 }
@@ -410,6 +437,17 @@ private final class SpriteAtlas {
         }
         originalItem.submenu = originalMenu
         menu.addItem(originalItem)
+        let reminderVoiceItem = NSMenuItem(title: "试听提醒配音", action: nil, keyEquivalent: "")
+        let reminderVoiceMenu = NSMenu()
+        for reminder in Reminder.allCases {
+            let item = NSMenuItem(title: reminder.title,
+                                  action: #selector(previewReminderRecording(_:)), keyEquivalent: "")
+            item.representedObject = reminder.rawValue
+            item.target = self
+            reminderVoiceMenu.addItem(item)
+        }
+        reminderVoiceItem.submenu = reminderVoiceMenu
+        menu.addItem(reminderVoiceItem)
         menu.addItem(NSMenuItem(title: "试听系统朗读", action: #selector(previewVoice), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "今日小建议", action: #selector(showTip), keyEquivalent: "t"))
         let actionItem = NSMenuItem(title: "看看小动作", action: nil, keyEquivalent: "")
@@ -550,7 +588,7 @@ private final class SpriteAtlas {
         panel.orderFrontRegardless()
     }
 
-    private func originalClipURL(_ clip: OriginalClip) -> URL? {
+    private func voiceURL(named name: String) -> URL? {
         let environment = ProcessInfo.processInfo.environment["NAHIDA_VOICE_DIR"].flatMap {
             $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true)
         }
@@ -558,7 +596,7 @@ private final class SpriteAtlas {
         let personal = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/pets/nahida-companion/voice", isDirectory: true)
         for directory in [environment, bundled, personal].compactMap({ $0 }) {
-            let url = directory.appendingPathComponent("\(clip.rawValue).m4a")
+            let url = directory.appendingPathComponent("\(name).m4a")
             if FileManager.default.isReadableFile(atPath: url.path) { return url }
         }
         return nil
@@ -571,7 +609,7 @@ private final class SpriteAtlas {
     }
 
     @discardableResult private func playOriginalClip(_ clip: OriginalClip) -> Bool {
-        guard let url = originalClipURL(clip) else { return false }
+        guard let url = voiceURL(named: clip.rawValue) else { return false }
         cancelDialogue()
         speaker.stopSpeaking(at: .immediate)
         originalPlayer?.stop()
@@ -626,6 +664,27 @@ private final class SpriteAtlas {
         }
     }
 
+    private func sayWithRecording(
+        _ message: String, fileName: String, speak: Bool = true, action: PetAction = .wave
+    ) {
+        guard speak, speechEnabled, let url = voiceURL(named: fileName) else {
+            say(message, speak: speak, action: action)
+            return
+        }
+        cancelDialogue()
+        speaker.stopSpeaking(at: .immediate)
+        originalPlayer?.stop()
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.prepareToPlay()
+            originalPlayer = player
+            showBubble(message, action: action)
+            if !player.play() { say(message, action: action) }
+        } catch {
+            say(message, action: action)
+        }
+    }
+
     private func idleSeconds() -> TimeInterval {
         let types: [CGEventType] = [.keyDown, .mouseMoved, .leftMouseDown, .rightMouseDown, .scrollWheel]
         return types.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
@@ -661,7 +720,8 @@ private final class SpriteAtlas {
         pending.removeAll()
         lastDeliveredAt = now
         let quietHours = hour < 9 || hour >= 21
-        say(next.text, speak: !quietHours, action: next == .sleep ? .nap : .wave)
+        sayWithRecording(next.text, fileName: "reminder-\(next.rawValue)",
+                         speak: !quietHours, action: next == .sleep ? .nap : .wave)
     }
 
     @objc private func petTapped() {
@@ -690,6 +750,17 @@ private final class SpriteAtlas {
             say("还没有安装本地原声片段。请查看 README 的语音安装说明。", speak: false, action: .curious)
         }
     }
+    @objc private func previewReminderRecording(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String,
+              let reminder = Reminder(rawValue: name) else { return }
+        let fileName = "reminder-\(reminder.rawValue)"
+        guard voiceURL(named: fileName) != nil else {
+            say("尚未安装这句提醒的配音。", speak: false, action: .curious)
+            return
+        }
+        sayWithRecording(reminder.text, fileName: fileName,
+                         action: reminder == .sleep ? .nap : .wave)
+    }
     @objc private func previewVoice() {
         say("嘿嘿，我在这里呀。今天也要好好照顾自己哦。", action: .cuddle, preview: true)
     }
@@ -709,17 +780,8 @@ private final class SpriteAtlas {
         UserDefaults.standard.set(pace.rawValue, forKey: "motionPace")
     }
     @objc private func showTip() {
-        let tips = [
-            "抬头看看屏幕的位置，肩膀放松，手腕自然地放平。",
-            "小纸条：这周找两天练练力量，也留点时间散步。",
-            "夜晚也要留给梦。成年人通常需要至少七小时睡眠。",
-            "眼睛也会累呀。看看远处，再轻轻眨眨眼。",
-            "代码可以慢慢写，我们先起身走动两分钟。",
-            "今天若有空，出去走走、晒晒自然光吧。",
-            "给脑袋留一点离线时间，灵感也许会悄悄回来。",
-            "手腕或腰背一直疼的话，记得找专业人士看看。"
-        ]
-        say(tips.randomElement() ?? tips[0])
+        let tip = Tip.allCases.randomElement() ?? .posture
+        sayWithRecording(tip.text, fileName: "tip-\(tip.rawValue)")
     }
     @objc private func snooze() {
         snoozeUntil = Date().addingTimeInterval(60 * 60)
